@@ -14,9 +14,11 @@ class CryptoModel:
         self.report_model = report_model
 
     def encrypt_report(self, report: dict, passphrase: str) -> tuple[dict, dict]:
+        # The nonce is stored alongside the ciphertext so the same keystream can be rebuilt later.
         nonce_bytes = generate_nonce()
         nonce_text = base64.b64encode(nonce_bytes).decode("ascii")
 
+        # The report hash is refreshed after the nonce is attached because the nonce becomes part of the saved payload.
         report_to_store = self.report_model.attach_nonce_and_refresh_hash(report, nonce_text)
         plaintext_json = json.dumps(report_to_store, indent=2, ensure_ascii=True)
         ciphertext = encrypt_text(plaintext_json, passphrase, nonce_bytes)
@@ -29,12 +31,13 @@ class CryptoModel:
             "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
             "stored_integrity_hash": report_to_store["integrity_hash"],
             "encryption_scheme": "XOR keystream derived from custom SHA-256(passphrase + nonce + counter)",
-            "educational_notice": "Educational prototype only. This is not production-grade cryptography.",
+            "educational_notice": "Instructional use only. This is not production-grade cryptography.",
         }
         return wrapper, report_to_store
 
     def decrypt_report(self, wrapper: dict, passphrase: str) -> dict:
         try:
+            # Stored nonce and ciphertext are base64-encoded so they remain JSON-safe.
             nonce_bytes = base64.b64decode(wrapper["nonce"])
             ciphertext = base64.b64decode(wrapper["ciphertext"])
         except Exception as error:
@@ -49,6 +52,7 @@ class CryptoModel:
                 "Decryption failed. The passphrase may be incorrect or the file may be corrupted."
             ) from error
 
+        # After decryption, confirm the report still matches the integrity hash saved in the wrapper.
         verification = self.report_model.verify_report(report, stored_hash=wrapper.get("stored_integrity_hash"))
         return {
             "report": report,

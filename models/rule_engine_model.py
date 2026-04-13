@@ -1,4 +1,4 @@
-"""Hand-authored rule base for the EduGuide expert system prototype."""
+"""Hand-authored rule base for the EduGuide expert system."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ class RuleEngineModel:
         self.rules = self._build_rules()
 
     def evaluate(self, student_values: dict) -> dict:
+        # Convert raw values into normalized bands before checking them against the rule set.
         profile = self._build_profile(student_values)
         triggered_rules = []
 
@@ -34,6 +35,7 @@ class RuleEngineModel:
                 )
 
         if triggered_rules:
+            # Multiple rules can fire; the final classification always follows the highest-severity match.
             final_risk = self._highest_severity(triggered_rules)
             primary_rules = [rule for rule in triggered_rules if rule["risk_level"] == final_risk]
             explanation = (
@@ -57,6 +59,7 @@ class RuleEngineModel:
         }
 
     def _build_profile(self, student_values: dict) -> dict:
+        # The rule engine operates on simplified bands so the rules remain readable and deterministic.
         attendance = float(student_values["Attendance"])
         hours_studied = float(student_values["Hours_Studied"])
         previous_scores = float(student_values["Previous_Scores"])
@@ -183,6 +186,7 @@ class RuleEngineModel:
 
     @staticmethod
     def _three_band(value: float, low_cutoff: float, high_cutoff: float) -> str:
+        # Shared helper for numeric fields that use low / medium / high buckets.
         if value < low_cutoff:
             return "low"
         if value >= high_cutoff:

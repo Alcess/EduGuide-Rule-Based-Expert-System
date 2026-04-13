@@ -1,8 +1,9 @@
-"""Demo-only reversible encryption built on the custom SHA-256 module.
+"""Reversible encryption helpers built on the custom SHA-256 module.
 
-This is intentionally simple so the prototype can show how a one-way hash
-can still participate in a reversible workflow by generating a keystream.
-It is not production-grade cryptography.
+These helpers derive a keystream from the passphrase, nonce, and counter so
+report data can be encrypted and later recovered within the application
+workflow. This design is included for instructional use and is not
+production-grade cryptography.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ def derive_keystream(passphrase: str, nonce: bytes, length: int) -> bytes:
     keystream = bytearray()
     counter = 0
 
+    # Extend the keystream one SHA-256 block at a time until it covers the requested payload length.
     while len(keystream) < length:
         counter_bytes = counter.to_bytes(8, byteorder="big")
         block = sha256_digest(passphrase_bytes + nonce + counter_bytes)
@@ -34,6 +36,7 @@ def derive_keystream(passphrase: str, nonce: bytes, length: int) -> bytes:
 
 
 def xor_bytes(data: bytes, keystream: bytes) -> bytes:
+    # XOR is symmetric, so the same helper works for both encryption and decryption.
     return bytes(value ^ key for value, key in zip(data, keystream))
 
 

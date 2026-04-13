@@ -1,4 +1,4 @@
-"""Dataset loading and input validation for the EduGuide prototype."""
+"""Dataset loading, summarization, and input validation for EduGuide."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pandas as pd
 
 
 class DatasetModel:
+    # Only the fields below participate in validation, rule evaluation, and report generation.
     selected_columns = [
         "Attendance",
         "Hours_Studied",
@@ -51,10 +52,11 @@ class DatasetModel:
         missing_columns = [column for column in self.selected_columns if column not in dataframe.columns]
         if missing_columns:
             raise ValueError(
-                "The dataset is missing required prototype columns: " + ", ".join(missing_columns)
+                "The dataset is missing required application columns: " + ", ".join(missing_columns)
             )
 
         self.dataframe = dataframe
+        # Cache dataset-derived constraints so GUI validation does not need to rescan the CSV each time.
         self.numeric_summary = self._build_numeric_summary(dataframe)
         self.categorical_options = self._build_categorical_options(dataframe)
 
@@ -73,6 +75,7 @@ class DatasetModel:
 
         cleaned_values: dict[str, object] = {}
 
+        # Numeric inputs are range-checked against the actual dataset so the UI stays aligned with the source data.
         for field in self.numeric_fields:
             raw_text = str(raw_values.get(field, "")).strip()
             if raw_text == "":
@@ -89,6 +92,7 @@ class DatasetModel:
                     f"{field.replace('_', ' ')} must be between {summary['min']} and {summary['max']} based on the dataset."
                 )
 
+            # Tutoring sessions is the only numeric field that must remain an integer for rule evaluation.
             if field == "Tutoring_Sessions":
                 if numeric_value != int(numeric_value):
                     raise ValueError("Tutoring Sessions must be a whole number.")
@@ -96,6 +100,7 @@ class DatasetModel:
             else:
                 cleaned_values[field] = round(numeric_value, 2)
 
+        # Categorical inputs must match values that actually appear in the loaded dataset.
         for field in self.categorical_fields:
             value = str(raw_values.get(field, "")).strip()
             options = self.categorical_options[field]
@@ -108,6 +113,7 @@ class DatasetModel:
     def _build_numeric_summary(self, dataframe: pd.DataFrame) -> dict[str, dict[str, float]]:
         summary: dict[str, dict[str, float]] = {}
         for field in self.numeric_fields:
+            # Drop missing values before computing limits so validation reflects only real observations.
             series = dataframe[field].dropna().astype(float)
             summary[field] = {
                 "min": float(series.min()),
@@ -119,6 +125,7 @@ class DatasetModel:
     def _build_categorical_options(self, dataframe: pd.DataFrame) -> dict[str, list[str]]:
         options: dict[str, list[str]] = {}
         for field in self.categorical_fields:
+            # Normalize whitespace before collecting unique category values for the GUI comboboxes.
             values = dataframe[field].dropna().astype(str).str.strip()
             options[field] = sorted(value for value in values.unique() if value)
         return options

@@ -1,4 +1,4 @@
-"""Report generation and integrity verification for the EduGuide prototype."""
+"""Report generation and integrity verification for EduGuide."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from utils.sha256_scratch import sha256_hex
 class ReportModel:
     def create_report(self, student_values: dict, evaluation: dict, nonce: str | None = None) -> dict:
         report = {
+            # The report id combines a timestamp and short random suffix to keep saved filenames readable.
             "report_id": f"EDU-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6].upper()}",
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "selected_student_values": student_values,
@@ -33,13 +34,16 @@ class ReportModel:
         return updated_report
 
     def compute_integrity_hash(self, report: dict) -> str:
+        # Exclude the stored hash field itself so the digest is computed over a stable payload.
         payload = {key: value for key, value in report.items() if key != "integrity_hash"}
+        # Canonical JSON ensures the same logical report always hashes to the same value.
         canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return sha256_hex(canonical_json.encode("utf-8"))
 
     def verify_report(self, report: dict, stored_hash: str | None = None) -> dict:
         computed_hash = self.compute_integrity_hash(report)
         report_hash = str(report.get("integrity_hash", ""))
+        # The report must agree with its own embedded hash, and optionally with the wrapper hash as well.
         passed = computed_hash == report_hash
 
         if stored_hash is not None:

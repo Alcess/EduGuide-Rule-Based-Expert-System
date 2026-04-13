@@ -106,6 +106,7 @@ def sha256_digest(message: bytes) -> bytes:
     if not isinstance(message, (bytes, bytearray)):
         raise TypeError("sha256_digest expects bytes-like input.")
 
+    # SHA-256 processes padded input in 512-bit chunks while carrying forward an 8-word state.
     padded_message = _pad_message(bytes(message))
     hash_values = INITIAL_HASHES[:]
 
@@ -119,6 +120,7 @@ def sha256_digest(message: bytes) -> bytes:
             schedule[index] = int.from_bytes(chunk[word_start : word_start + 4], byteorder="big")
 
         for index in range(16, 64):
+            # Extend the first 16 chunk words into the remaining schedule words used by the round function.
             sigma0 = (
                 _right_rotate(schedule[index - 15], 7)
                 ^ _right_rotate(schedule[index - 15], 18)
@@ -146,6 +148,7 @@ def sha256_digest(message: bytes) -> bytes:
             majority = (a & b) ^ (a & c) ^ (b & c)
             temp2 = (big_sigma0 + majority) & 0xFFFFFFFF
 
+            # Shift the working state and inject the two temporary values for this round.
             h = g
             g = f
             f = e

@@ -1,4 +1,4 @@
-"""Entry point for the EduGuide desktop prototype."""
+"""Application entry point for the EduGuide desktop advisor."""
 
 from __future__ import annotations
 
