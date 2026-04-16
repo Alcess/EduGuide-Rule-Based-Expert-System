@@ -57,9 +57,10 @@ class ScrollablePage(tk.Frame):
 
 
 class MainView:
-    def __init__(self, root: tk.Tk, system_info: dict) -> None:
+    def __init__(self, root: tk.Tk, system_info: dict, field_specs: list[dict[str, str]]) -> None:
         self.root = root
         self.system_info = system_info
+        self.field_specs = field_specs
 
         self.root.title("EduGuide: Rule-Based Academic Advising Expert System")
         self.root.geometry("1240x820")
@@ -68,7 +69,10 @@ class MainView:
 
         self.input_vars: dict[str, tk.StringVar] = {}
         self.comboboxes: dict[str, ttk.Combobox] = {}
-        self.output_text: ScrolledText | None = None
+        self.overview_text: ScrolledText | None = None
+        self.report_text: ScrolledText | None = None
+        self.security_text: ScrolledText | None = None
+        self.output_notebook: ttk.Notebook | None = None
         self.status_var = tk.StringVar(
             value="Welcome to EduGuide. Review the system overview, then continue to the evaluation workspace."
         )
@@ -368,37 +372,69 @@ class MainView:
         content_frame.columnconfigure(1, weight=1)
         content_frame.rowconfigure(0, weight=1)
 
-        input_frame = ttk.LabelFrame(content_frame, text="Student Input", padding=16, style="Surface.TLabelframe")
-        input_frame.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
+        input_shell = tk.Frame(
+            content_frame,
+            bg=PALETTE["surface"],
+            padx=16,
+            pady=16,
+            highlightbackground=PALETTE["border"],
+            highlightthickness=1,
+            width=380,
+        )
+        input_shell.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
+        input_shell.grid_propagate(False)
+        input_shell.grid_rowconfigure(2, weight=1)
+        input_shell.grid_columnconfigure(0, weight=1)
 
-        field_specs = [
-            ("Attendance", "Attendance (%)", "entry"),
-            ("Hours_Studied", "Hours Studied", "entry"),
-            ("Previous_Scores", "Previous Scores", "entry"),
-            ("Exam_Score", "Exam Score", "entry"),
-            ("Tutoring_Sessions", "Tutoring Sessions", "entry"),
-            ("Parental_Involvement", "Parental Involvement", "combo"),
-            ("Access_to_Resources", "Access to Resources", "combo"),
-            ("Internet_Access", "Internet Access", "combo"),
-        ]
+        tk.Label(
+            input_shell,
+            text="Student Input Form",
+            bg=PALETTE["surface"],
+            fg=PALETTE["hero"],
+            font=("Georgia", 15, "bold"),
+            anchor="w",
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
 
-        for row_index, (field_name, label_text, field_type) in enumerate(field_specs):
-            ttk.Label(input_frame, text=label_text).grid(row=row_index, column=0, sticky="w", pady=4)
+        tk.Label(
+            input_shell,
+            text=(
+                "Previous Score Percentage and Exam Score Percentage use a 0 to 100 scale. "
+                "Exam percentages above 100 are treated as anomalies and capped to 100 during evaluation."
+            ),
+            bg=PALETTE["surface"],
+            fg=PALETTE["muted"],
+            font=("Segoe UI", 9),
+            wraplength=320,
+            justify="left",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+
+        scrollable_form = ScrollablePage(input_shell, background=PALETTE["surface"])
+        scrollable_form.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
+
+        form_content = scrollable_form.content
+        form_content.grid_columnconfigure(1, weight=1)
+
+        for row_index, item in enumerate(self.field_specs):
+            field_name = item["name"]
+            label_text = item["label"]
+            field_type = item["input_type"]
+
+            ttk.Label(form_content, text=label_text).grid(row=row_index, column=0, sticky="w", pady=4, padx=(0, 8))
             variable = tk.StringVar()
             self.input_vars[field_name] = variable
 
             if field_type == "combo":
-                widget = ttk.Combobox(input_frame, textvariable=variable, state="readonly", width=22)
+                widget = ttk.Combobox(form_content, textvariable=variable, state="readonly", width=24)
                 widget.grid(row=row_index, column=1, sticky="ew", pady=4)
                 self.comboboxes[field_name] = widget
             else:
-                widget = ttk.Entry(input_frame, textvariable=variable, width=24)
+                widget = ttk.Entry(form_content, textvariable=variable, width=26)
                 widget.grid(row=row_index, column=1, sticky="ew", pady=4)
 
-        input_frame.columnconfigure(1, weight=1)
-
-        button_frame = ttk.LabelFrame(input_frame, text="Actions", padding=12, style="Surface.TLabelframe")
-        button_frame.grid(row=len(field_specs), column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        button_frame = ttk.LabelFrame(form_content, text="Actions", padding=12, style="Surface.TLabelframe")
+        button_frame.grid(row=len(self.field_specs), column=0, columnspan=2, sticky="ew", pady=(16, 0))
         button_frame.columnconfigure(0, weight=1)
 
         self.load_dataset_button = ttk.Button(button_frame, text="Load Dataset", style="Secondary.TButton")
@@ -424,8 +460,25 @@ class MainView:
         output_frame.rowconfigure(0, weight=1)
         output_frame.columnconfigure(0, weight=1)
 
-        self.output_text = ScrolledText(
-            output_frame,
+        self.output_notebook = ttk.Notebook(output_frame)
+        self.output_notebook.grid(row=0, column=0, sticky="nsew")
+
+        overview_tab = ttk.Frame(self.output_notebook, style="Page.TFrame")
+        report_tab = ttk.Frame(self.output_notebook, style="Page.TFrame")
+        security_tab = ttk.Frame(self.output_notebook, style="Page.TFrame")
+        self.output_notebook.add(overview_tab, text="Inference Overview")
+        self.output_notebook.add(report_tab, text="Report Preview")
+        self.output_notebook.add(security_tab, text="Security")
+
+        self.overview_text = self._build_output_text(overview_tab)
+        self.report_text = self._build_output_text(report_tab)
+        self.security_text = self._build_output_text(security_tab)
+
+    def _build_output_text(self, parent: ttk.Frame) -> ScrolledText:
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        widget = ScrolledText(
+            parent,
             wrap="word",
             font=("Consolas", 10),
             padx=10,
@@ -435,7 +488,9 @@ class MainView:
             background="#fffdf9",
             foreground=PALETTE["text"],
         )
-        self.output_text.grid(row=0, column=0, sticky="nsew")
+        widget.grid(row=0, column=0, sticky="nsew")
+        widget.configure(state="disabled")
+        return widget
 
     def _create_text_section(self, parent: tk.Frame, row: int, title: str, body: str) -> None:
         section = self._create_section_shell(parent, row=row, title=title)
@@ -570,9 +625,39 @@ class MainView:
             if values and not self.input_vars[field].get().strip():
                 self.input_vars[field].set(values[0])
 
-    def set_output(self, content: str) -> None:
-        self.output_text.delete("1.0", tk.END)
-        self.output_text.insert(tk.END, content)
+    def set_student_inputs(self, values: dict[str, object]) -> None:
+        for field, value in values.items():
+            if field in self.input_vars:
+                self.input_vars[field].set(str(value))
+
+    def set_overview_output(self, content: str) -> None:
+        self._set_output(self.overview_text, content)
+
+    def set_report_output(self, content: str) -> None:
+        self._set_output(self.report_text, content)
+
+    def set_security_output(self, content: str) -> None:
+        self._set_output(self.security_text, content)
+
+    def show_output_tab(self, tab_name: str) -> None:
+        if self.output_notebook is None:
+            return
+
+        tab_map = {
+            "overview": 0,
+            "report": 1,
+            "security": 2,
+        }
+        self.output_notebook.select(tab_map.get(tab_name, 0))
+
+    @staticmethod
+    def _set_output(widget: ScrolledText | None, content: str) -> None:
+        if widget is None:
+            return
+        widget.configure(state="normal")
+        widget.delete("1.0", tk.END)
+        widget.insert(tk.END, content)
+        widget.configure(state="disabled")
 
     def set_status(self, message: str) -> None:
         self.status_var.set(message)

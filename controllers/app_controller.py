@@ -14,7 +14,6 @@ from views.main_view import MainView
 
 class AppController:
     def __init__(self, root) -> None:
-        # Keep base paths centralized so record and dataset handling stay relative to the project root.
         self.base_dir = Path(__file__).resolve().parent.parent
         self.records_dir = self.base_dir / "records"
 
@@ -24,7 +23,7 @@ class AppController:
         self.crypto_model = CryptoModel(self.report_model)
 
         self.system_info = self._build_system_info()
-        self.view = MainView(root, self.system_info)
+        self.view = MainView(root, self.system_info, self.dataset_model.get_field_specs())
         self.view.bind_actions(self)
 
         self.dataset_metadata: dict | None = None
@@ -33,11 +32,9 @@ class AppController:
         self.current_report: dict | None = None
         self.current_wrapper: dict | None = None
         self.output_sections = {
-            "dataset": "",
-            "evaluation": "",
+            "overview": "",
             "report": "",
-            "crypto": "",
-            "verification": "",
+            "security": "",
         }
         self.view.set_status("Home screen ready. Review the overview or select Start Evaluation to continue.")
 
@@ -48,12 +45,11 @@ class AppController:
     def show_evaluation_page(self) -> None:
         self.view.show_evaluation_page()
         if self.dataset_metadata is None:
-            # The evaluation screen depends on dataset-backed ranges and category options.
             self.load_dataset()
             if self.dataset_metadata is None:
                 return
-        elif not self.output_sections["dataset"]:
-            self.output_sections["dataset"] = self._format_dataset_section(self.dataset_metadata)
+        elif not self.output_sections["overview"]:
+            self.output_sections["overview"] = self._format_dataset_section(self.dataset_metadata)
             self._refresh_output()
 
         self.view.set_status("Evaluation workspace ready.")
@@ -69,13 +65,10 @@ class AppController:
             self.view.set_status("Dataset load failed.")
             return
 
-    # Refresh the selectable categorical values every time the dataset is loaded.
         self.view.set_categorical_options(self.dataset_metadata["categorical_options"])
-        self.output_sections["dataset"] = self._format_dataset_section(self.dataset_metadata)
-        self.output_sections["evaluation"] = ""
+        self.output_sections["overview"] = self._format_dataset_section(self.dataset_metadata)
         self.output_sections["report"] = ""
-        self.output_sections["crypto"] = ""
-        self.output_sections["verification"] = ""
+        self.output_sections["security"] = ""
         self._refresh_output()
         self.view.set_status("Dataset loaded successfully.")
 
@@ -95,16 +88,16 @@ class AppController:
 
         self.current_student_values = student_values
         self.current_evaluation = evaluation
-        # A fresh evaluation invalidates any previously generated report or wrapper.
         self.current_report = None
         self.current_wrapper = None
+        self.view.set_student_inputs(student_values)
 
-        self.output_sections["evaluation"] = self._format_evaluation_section(student_values, evaluation)
+        self.output_sections["overview"] = self._format_overview_section(student_values, evaluation)
         self.output_sections["report"] = ""
-        self.output_sections["crypto"] = ""
-        self.output_sections["verification"] = ""
+        self.output_sections["security"] = ""
         self._refresh_output()
         self.view.set_status(f"Student evaluated: {evaluation['risk_level']}")
+        self.view.show_output_tab("overview")
 
     def generate_report(self) -> None:
         if self.current_student_values is None or self.current_evaluation is None:
@@ -115,10 +108,15 @@ class AppController:
         self.current_wrapper = None
 
         self.output_sections["report"] = self._format_report_section(self.current_report)
-        self.output_sections["crypto"] = ""
-        self.output_sections["verification"] = ""
+        self.output_sections["security"] = self._format_security_section(
+            crypto_message="Report generated locally and ready for encryption.",
+            verification=None,
+            wrapper=None,
+            report=self.current_report,
+        )
         self._refresh_output()
         self.view.set_status("Report generated and ready for preview or saving.")
+        self.view.show_output_tab("report")
 
     def save_encrypted_report(self) -> None:
         if self.current_report is None:
@@ -131,7 +129,6 @@ class AppController:
             return
 
         try:
-            # Encryption returns both the storage wrapper and the report copy with its nonce-bound hash.
             wrapper, saved_report = self.crypto_model.encrypt_report(self.current_report, passphrase)
             saved_path = save_encrypted_wrapper(self.records_dir, wrapper)
         except Exception as error:
@@ -142,16 +139,18 @@ class AppController:
         self.current_report = saved_report
         self.current_wrapper = wrapper
         self.output_sections["report"] = self._format_report_section(self.current_report)
-        self.output_sections["crypto"] = self._format_crypto_section(
-            f"Encrypted report saved to: {saved_path}",
-            wrapper,
-        )
-        self.output_sections["verification"] = self._format_verification_section(
-            self.report_model.verify_report(self.current_report, stored_hash=wrapper["stored_integrity_hash"])
+        self.output_sections["security"] = self._format_security_section(
+            crypto_message=f"Encrypted report saved to: {saved_path}",
+            verification=self.report_model.verify_report(
+                self.current_report, stored_hash=wrapper["stored_integrity_hash"]
+            ),
+            wrapper=wrapper,
+            report=self.current_report,
         )
         self._refresh_output()
         self.view.set_status("Encrypted report saved successfully.")
         self.view.show_info(f"Encrypted report saved to:\n{saved_path}")
+        self.view.show_output_tab("security")
 
     def open_encrypted_report(self) -> None:
         selected_path = self.view.ask_open_report_path(self.records_dir)
@@ -173,18 +172,25 @@ class AppController:
 
         self.current_wrapper = wrapper
         self.current_report = result["report"]
-        # Recovering the original form values makes the reopened report consistent with the evaluation workspace.
-        self.current_student_values = self.current_report.get("selected_student_values")
+        self.current_student_values = self.current_report.get("raw_student_values") or self.current_report.get(
+            "selected_student_values"
+        )
         self.current_evaluation = None
 
+        if self.current_student_values:
+            self.view.set_student_inputs(self.current_student_values)
+
         self.output_sections["report"] = self._format_report_section(self.current_report)
-        self.output_sections["crypto"] = self._format_crypto_section(
-            f"Decrypted saved report from: {selected_path}",
-            wrapper,
+        self.output_sections["security"] = self._format_security_section(
+            crypto_message=f"Decrypted saved report from: {selected_path}",
+            verification=result["verification"],
+            wrapper=wrapper,
+            report=self.current_report,
         )
-        self.output_sections["verification"] = self._format_verification_section(result["verification"])
+        self.output_sections["overview"] = self._format_opened_report_overview(self.current_report)
         self._refresh_output()
         self.view.show_evaluation_page()
+        self.view.show_output_tab("report")
 
         if result["verification"]["passed"]:
             self.view.set_status("Encrypted report opened and integrity verified.")
@@ -201,97 +207,75 @@ class AppController:
             stored_hash = self.current_wrapper.get("stored_integrity_hash")
 
         verification = self.report_model.verify_report(self.current_report, stored_hash=stored_hash)
-        self.output_sections["verification"] = self._format_verification_section(verification)
+        existing_security = self.output_sections["security"]
+        crypto_message = "Integrity check completed for the current in-memory report."
+        if self.current_wrapper is not None:
+            crypto_message = existing_security.split("\n", 2)[1] if "\n" in existing_security else crypto_message
+        self.output_sections["security"] = self._format_security_section(
+            crypto_message=crypto_message,
+            verification=verification,
+            wrapper=self.current_wrapper,
+            report=self.current_report,
+        )
         self._refresh_output()
         self.view.set_status("Integrity verification completed.")
+        self.view.show_output_tab("security")
 
     def _refresh_output(self) -> None:
-        # Preserve a stable top-to-bottom section order even when some sections are empty.
-        ordered_sections = [
-            self.output_sections["dataset"],
-            self.output_sections["evaluation"],
-            self.output_sections["report"],
-            self.output_sections["crypto"],
-            self.output_sections["verification"],
-        ]
-        content = "\n\n".join(section for section in ordered_sections if section.strip())
-        self.view.set_output(content)
+        self.view.set_overview_output(self.output_sections["overview"])
+        self.view.set_report_output(self.output_sections["report"])
+        self.view.set_security_output(self.output_sections["security"])
 
     def _build_system_info(self) -> dict:
         return {
             "title": "EduGuide: Rule-Based Academic Advising Expert System",
             "subtitle": (
-                "A student advising system with academic risk classification, recommendation generation, "
-                "report handling, and SHA-256-based report security."
+                "A forward-chaining student advising system with expanded academic risk analysis, "
+                "explanation trace, report handling, and SHA-256-based record security."
             ),
             "overview": (
-                "EduGuide evaluates selected academic performance factors through explicit IF-THEN rules instead of a "
-                "machine-learning model. The application reviews student inputs, derives performance bands, classifies "
-                "the case as Low Risk, Moderate Risk, or High Risk, and produces recommendations plus a structured report "
-                "that can be saved, reopened, and checked for integrity."
+                "EduGuide evaluates student performance through explicit IF-THEN rules instead of machine learning. "
+                "The system validates 19 dataset-backed factors, converts them into symbolic categories, derives "
+                "intermediate knowledge groups through forward chaining, classifies risk, generates recommendations, "
+                "and produces a report that can be encrypted, reopened, and verified for integrity. "
+                "Previous_Scores and Exam_Score are handled as percentages, and anomalous exam percentages above 100 are capped to 100."
             ),
             "variables_intro": (
-                "The current system uses eight dataset-backed variables selected from StudentPerformanceFactors.csv. "
-                "These are the same fields used for validation, rule evaluation, and reporting in the live system."
+                "The live system uses 19 variables from StudentPerformanceFactors.csv, excluding Gender from the rule base. "
+                "The same fields drive validation, category derivation, rule evaluation, and report generation. "
+                "Previous Score Percentage and Exam Score Percentage both use a 0 to 100 interpretation."
             ),
             "variables": [
                 {
-                    "name": "Attendance",
-                    "description": "Student attendance percentage used to determine whether class participation is low, medium, or high.",
-                },
-                {
-                    "name": "Hours Studied",
-                    "description": "Study effort indicator used to derive the study band applied by the rule base.",
-                },
-                {
-                    "name": "Previous Scores",
-                    "description": "Historical academic performance used to detect whether past achievement suggests ongoing risk.",
-                },
-                {
-                    "name": "Exam Score",
-                    "description": "Current assessment performance used directly in several risk-classification rules.",
-                },
-                {
-                    "name": "Tutoring Sessions",
-                    "description": "Support-session count interpreted as none, limited, or active tutoring support.",
-                },
-                {
-                    "name": "Parental Involvement",
-                    "description": "Categorical indicator of home support considered in explainable advising rules.",
-                },
-                {
-                    "name": "Access to Resources",
-                    "description": "Learning-resource availability used to judge whether the student has adequate academic support inputs.",
-                },
-                {
-                    "name": "Internet Access",
-                    "description": "Connectivity status used to capture access limitations that can increase academic risk.",
-                },
+                    "name": item["label"],
+                    "description": f"Used as a {'numeric' if item['input_type'] == 'entry' else 'categorical'} fact within preprocessing, forward chaining, and reporting."
+                }
+                for item in self.dataset_model.get_field_specs()
             ],
             "modules": [
                 {
                     "name": "User Input Module",
-                    "description": "Collects the selected student performance values and opens existing protected reports for review.",
+                    "description": "Collects the expanded student factor set and rehydrates saved records into the evaluation workspace.",
                 },
                 {
                     "name": "Preprocessing Module",
-                    "description": "Validates numeric ranges against the dataset and enforces allowed categorical values before inference begins.",
+                    "description": "Validates dataset-backed ranges, normalizes categorical values, and maps numeric values into rule-ready bands.",
                 },
                 {
                     "name": "Rule Base and Inference Module",
-                    "description": "Applies the hand-authored IF-THEN rules to the derived student profile and records every triggered rule.",
+                    "description": "Applies 20 hand-authored IF-THEN rules with forward chaining to derive intermediate and final conclusions.",
                 },
                 {
                     "name": "Risk Classification Module",
-                    "description": "Assigns Low Risk, Moderate Risk, or High Risk based on the highest-severity triggered rule or the fallback policy.",
+                    "description": "Assigns Low Risk, Moderate Risk, or High Risk using deterministic severity priority and fallback handling.",
                 },
                 {
                     "name": "Recommendation Module",
-                    "description": "Generates advising actions that match the final risk level and the rule explanation.",
+                    "description": "Generates recommendation text from the final risk level and includes it in the explanation trace.",
                 },
                 {
                     "name": "Report Generation Module",
-                    "description": "Builds a structured report containing the student values, derived profile, triggered rules, explanation, and recommendations.",
+                    "description": "Builds a report with raw values, categorized inputs, intermediate facts, triggered rules, risk level, and explanation trace.",
                 },
                 {
                     "name": "SHA-256 Hash Generation Module",
@@ -304,7 +288,7 @@ class AppController:
             ],
             "rule_based_text": (
                 f"EduGuide uses human-readable IF-THEN rules, which keeps the advising logic transparent and easy to review in an academic setting. "
-                f"The current system uses {len(self.rule_engine_model.rules)} explicit rules, staying within the intended ten-rule scope while keeping the output explainable, reviewable, and easy to interpret."
+                f"The current system uses {self.rule_engine_model.rule_count} explicit rules across intermediate analysis, risk classification, and recommendation generation, and it evaluates them in a forward-chaining sequence."
             ),
             "security_text": (
                 "The project includes a SHA-256 implementation written from scratch in pure Python. That hash is used for report integrity checking and also participates in the protected report workflow by deriving keystream blocks for the reversible encryption layer. SHA-256 itself is still a one-way hash, so it does not perform reversible decryption on its own."
@@ -314,8 +298,8 @@ class AppController:
             ),
             "workflow_steps": [
                 "Select Start Evaluation to open the advising workspace inside the same window.",
-                "Review the dataset summary and enter the required student variables.",
-                "Evaluate the student to obtain the risk class, triggered rules, and recommendations.",
+                "Load the dataset and review the form guidance, dataset ranges, and category bands.",
+                "Enter the student factors and evaluate the case to derive categorized inputs, intermediate facts, and the final risk level.",
                 "Generate a report, then optionally save an encrypted copy or reopen an existing protected record.",
                 "Use Back to Landing Page whenever you want to return to the presentation-focused home screen.",
             ],
@@ -351,16 +335,25 @@ class AppController:
     def _format_dataset_section(self, metadata: dict) -> str:
         numeric_lines = []
         for field, summary in metadata["numeric_summary"].items():
+            band_text = ", ".join(
+                f"{band}={range_text}" for band, range_text in metadata["banding_rules"].get(field, {}).items()
+            )
             numeric_lines.append(
                 f"- {field}: min={summary['min']}, max={summary['max']}, mean={summary['mean']}"
+                + (f" | bands: {band_text}" if band_text else "")
+                + (
+                    " | valid input: 0-100 percentage"
+                    if field in {"Previous_Scores", "Exam_Score"}
+                    else ""
+                )
             )
 
         categorical_lines = []
         for field, values in metadata["categorical_options"].items():
             categorical_lines.append(f"- {field}: {', '.join(values)}")
 
-        return (
-            "DATASET SUMMARY\n"
+        section = (
+            "DATASET SUMMARY AND INPUT GUIDANCE\n"
             f"Path: {metadata['dataset_path']}\n"
             f"Rows loaded: {metadata['row_count']}\n"
             f"Selected dataset columns: {', '.join(metadata['selected_columns'])}\n"
@@ -370,58 +363,95 @@ class AppController:
             + "\n".join(categorical_lines)
         )
 
-    def _format_evaluation_section(self, student_values: dict, evaluation: dict) -> str:
+        normalization_notes = metadata.get("normalization_notes", [])
+        if normalization_notes:
+            section += "\nScore normalization notes:\n" + "\n".join(f"- {note}" for note in normalization_notes)
+
+        return section
+
+    def _format_overview_section(self, student_values: dict, evaluation: dict) -> str:
         input_lines = [f"- {field}: {value}" for field, value in student_values.items()]
-        profile_lines = [f"- {field}: {value}" for field, value in evaluation["derived_profile"].items()]
+        category_lines = [f"- {field}: {value}" for field, value in evaluation["categorized_inputs"].items()]
+        intermediate_lines = [
+            f"- {field}: {value}" for field, value in evaluation["intermediate_facts"].items()
+        ]
+        triggered_lines = [
+            f"- {rule['rule_id']} [{rule['stage']}]: {rule['description']} => {rule['conclusion_field']} = {rule['conclusion_value']}"
+            for rule in evaluation["triggered_rules"]
+        ]
+        explanation_lines = [f"- {entry}" for entry in evaluation["explanation_trace"]]
 
-        if evaluation["triggered_rules"]:
-            triggered_lines = [
-                f"- {rule['rule_id']} [{rule['risk_level']}]: {rule['description']} | {rule['reason']}"
-                for rule in evaluation["triggered_rules"]
-            ]
-        else:
-            triggered_lines = ["- No explicit rule matched. Fallback review policy applied."]
-
-        recommendation_lines = [f"- {item}" for item in evaluation["recommendations"]]
-
-        return (
+        dataset_section = self._format_dataset_section(self.dataset_metadata) if self.dataset_metadata else ""
+        evaluation_section = (
             "EVALUATION RESULT\n"
-            "Selected student values:\n"
+            "Raw student input values:\n"
             + "\n".join(input_lines)
-            + "\nDerived bands and conditions:\n"
-            + "\n".join(profile_lines)
+            + "\nCategorized / profile values:\n"
+            + "\n".join(category_lines)
+            + "\nIntermediate conclusions:\n"
+            + "\n".join(intermediate_lines)
             + "\nTriggered rules:\n"
             + "\n".join(triggered_lines)
-            + f"\nAssigned risk level: {evaluation['risk_level']}\n"
-            + f"Reason: {evaluation['explanation']}\n"
-            + "Recommendations:\n"
-            + "\n".join(recommendation_lines)
+            + f"\nFinal risk level: {evaluation['risk_level']}\n"
+            + f"Recommendation: {evaluation['recommendation']}\n"
+            + f"Explanation summary: {evaluation['explanation_text']}\n"
+            + "Explanation trace:\n"
+            + "\n".join(explanation_lines)
         )
+        return dataset_section + "\n\n" + evaluation_section if dataset_section else evaluation_section
+
+    def _format_opened_report_overview(self, report: dict) -> str:
+        dataset_section = self._format_dataset_section(self.dataset_metadata) if self.dataset_metadata else ""
+        report_section = (
+            "OPENED REPORT SUMMARY\n"
+            f"Report ID: {report.get('report_id', 'Unknown')}\n"
+            f"Timestamp: {report.get('timestamp', 'Unknown')}\n"
+            f"Final risk level: {report.get('final_risk_level') or report.get('assigned_risk_level', 'Unknown')}\n"
+            f"Recommendation: {report.get('recommendation') or ' '.join(report.get('recommendations', []))}\n"
+            f"Explanation summary: {report.get('explanation_text') or report.get('explanation', '')}"
+        )
+        return dataset_section + "\n\n" + report_section if dataset_section else report_section
 
     def _format_report_section(self, report: dict) -> str:
-        return "GENERATED REPORT\n" + self.report_model.preview_text(report)
+        return self.report_model.preview_text(report)
 
-    def _format_crypto_section(self, headline: str, wrapper: dict) -> str:
-        return (
-            "ENCRYPTION / DECRYPTION STATUS\n"
-            f"{headline}\n"
-            f"Encryption scheme: {wrapper['encryption_scheme']}\n"
-            f"Nonce: {wrapper['nonce']}\n"
-            f"Stored integrity hash: {wrapper['stored_integrity_hash']}\n"
-            f"Notice: {wrapper['educational_notice']}"
-        )
+    def _format_security_section(
+        self,
+        crypto_message: str,
+        verification: dict | None,
+        wrapper: dict | None,
+        report: dict | None,
+    ) -> str:
+        lines = [
+            "ENCRYPTION, DECRYPTION, AND INTEGRITY STATUS",
+            crypto_message,
+        ]
 
-    def _format_verification_section(self, verification: dict) -> str:
-        status = "PASSED" if verification["passed"] else "FAILED"
-        stored_line = (
-            f"Wrapper stored hash: {verification['stored_hash']}\n"
-            if verification.get("stored_hash") is not None
-            else ""
-        )
-        return (
-            "INTEGRITY VERIFICATION\n"
-            f"Status: {status}\n"
-            f"Computed hash: {verification['computed_hash']}\n"
-            f"Report hash: {verification['report_hash']}\n"
-            + stored_line
-        )
+        if report is not None:
+            lines.append(f"Report SHA-256 integrity hash: {report.get('integrity_hash', '')}")
+            lines.append(f"Report nonce: {report.get('nonce', 'Not attached')}")
+
+        if wrapper is not None:
+            lines.extend(
+                [
+                    f"Encryption scheme: {wrapper['encryption_scheme']}",
+                    f"Wrapper nonce: {wrapper['nonce']}",
+                    f"Stored wrapper integrity hash: {wrapper['stored_integrity_hash']}",
+                    f"Notice: {wrapper['educational_notice']}",
+                ]
+            )
+
+        if verification is not None:
+            lines.extend(
+                [
+                    "",
+                    "INTEGRITY VERIFICATION",
+                    f"Status: {'PASSED' if verification['passed'] else 'FAILED'}",
+                    f"Computed hash: {verification['computed_hash']}",
+                    f"Report hash: {verification['report_hash']}",
+                ]
+            )
+            if verification.get("stored_hash") is not None:
+                lines.append(f"Wrapper stored hash: {verification['stored_hash']}")
+
+        return "\n".join(lines)
