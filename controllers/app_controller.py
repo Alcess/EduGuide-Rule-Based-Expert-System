@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from models.crypto_model import CryptoModel
@@ -35,6 +36,9 @@ class AppController:
             "overview": "",
             "report": "",
             "security": "",
+        }
+        self.field_labels = {
+            spec["name"]: spec["label"] for spec in self.dataset_model.get_field_specs()
         }
         self.view.set_status("Home screen ready. Review the overview or select Start Evaluation to continue.")
 
@@ -78,7 +82,6 @@ class AppController:
             return
 
         try:
-            # Validation normalizes raw GUI input into the types expected by the rule engine.
             student_values = self.dataset_model.validate_student_values(self.view.get_student_inputs())
             evaluation = self.rule_engine_model.evaluate(student_values)
         except Exception as error:
@@ -336,81 +339,89 @@ class AppController:
         numeric_lines = []
         for field, summary in metadata["numeric_summary"].items():
             band_text = ", ".join(
-                f"{band}={range_text}" for band, range_text in metadata["banding_rules"].get(field, {}).items()
+                f"{band}: {range_text}" for band, range_text in metadata["banding_rules"].get(field, {}).items()
             )
+            suffix = ""
+            if field in {"Previous_Scores", "Exam_Score"}:
+                suffix = " | accepted input: 0-100 percentage"
             numeric_lines.append(
-                f"- {field}: min={summary['min']}, max={summary['max']}, mean={summary['mean']}"
+                f"- {self._display_label(field)}: min {summary['min']}, max {summary['max']}, mean {summary['mean']}"
                 + (f" | bands: {band_text}" if band_text else "")
-                + (
-                    " | valid input: 0-100 percentage"
-                    if field in {"Previous_Scores", "Exam_Score"}
-                    else ""
-                )
+                + suffix
             )
 
         categorical_lines = []
         for field, values in metadata["categorical_options"].items():
-            categorical_lines.append(f"- {field}: {', '.join(values)}")
+            categorical_lines.append(f"- {self._display_label(field)}: {', '.join(values)}")
 
         section = (
-            "DATASET SUMMARY AND INPUT GUIDANCE\n"
-            f"Path: {metadata['dataset_path']}\n"
-            f"Rows loaded: {metadata['row_count']}\n"
-            f"Selected dataset columns: {', '.join(metadata['selected_columns'])}\n"
-            "Numeric field ranges:\n"
+            "DATASET OVERVIEW\n"
+            f"- Source: {metadata['dataset_path']}\n"
+            f"- Rows loaded: {metadata['row_count']}\n"
+            f"- Active fields: {len(metadata['selected_columns'])}\n"
+            f"- Included columns: {', '.join(self._display_label(field) for field in metadata['selected_columns'])}\n"
+            "\nNUMERIC INPUT GUIDANCE\n"
             + "\n".join(numeric_lines)
-            + "\nCategorical options:\n"
+            + "\n\nCATEGORICAL OPTIONS\n"
             + "\n".join(categorical_lines)
         )
 
         normalization_notes = metadata.get("normalization_notes", [])
         if normalization_notes:
-            section += "\nScore normalization notes:\n" + "\n".join(f"- {note}" for note in normalization_notes)
+            section += "\n\nSCORE NORMALIZATION NOTES\n" + "\n".join(
+                f"- {note}" for note in normalization_notes
+            )
 
         return section
 
     def _format_overview_section(self, student_values: dict, evaluation: dict) -> str:
-        input_lines = [f"- {field}: {value}" for field, value in student_values.items()]
-        category_lines = [f"- {field}: {value}" for field, value in evaluation["categorized_inputs"].items()]
-        intermediate_lines = [
-            f"- {field}: {value}" for field, value in evaluation["intermediate_facts"].items()
-        ]
-        triggered_lines = [
-            f"- {rule['rule_id']} [{rule['stage']}]: {rule['description']} => {rule['conclusion_field']} = {rule['conclusion_value']}"
-            for rule in evaluation["triggered_rules"]
-        ]
-        explanation_lines = [f"- {entry}" for entry in evaluation["explanation_trace"]]
-
         dataset_section = self._format_dataset_section(self.dataset_metadata) if self.dataset_metadata else ""
+        input_lines = self._format_key_value_lines(student_values)
+        category_lines = self._format_key_value_lines(evaluation["categorized_inputs"])
+        intermediate_lines = self._format_key_value_lines(evaluation["intermediate_facts"])
+        triggered_table = self.report_model.format_rule_table(
+            evaluation["triggered_rules"],
+            label_resolver=self._display_label,
+        )
+        explanation_lines = [f"- {entry}" for entry in evaluation["explanation_trace"]]
         evaluation_section = (
-            "EVALUATION RESULT\n"
-            "Raw student input values:\n"
+            "EVALUATION SUMMARY\n"
+            f"Risk level: {evaluation['risk_level']}\n"
+            f"Summary: {evaluation['explanation_text']}\n"
+            "\nRECOMMENDED ACTIONS\n"
+            + "\n".join(self._format_sentence_list(evaluation["recommendation"]))
+            + "\n\nSTUDENT INPUTS\n"
             + "\n".join(input_lines)
-            + "\nCategorized / profile values:\n"
+            + "\n\nCATEGORIZED PROFILE\n"
             + "\n".join(category_lines)
-            + "\nIntermediate conclusions:\n"
+            + "\n\nDERIVED FINDINGS\n"
             + "\n".join(intermediate_lines)
-            + "\nTriggered rules:\n"
-            + "\n".join(triggered_lines)
-            + f"\nFinal risk level: {evaluation['risk_level']}\n"
-            + f"Recommendation: {evaluation['recommendation']}\n"
-            + f"Explanation summary: {evaluation['explanation_text']}\n"
-            + "Explanation trace:\n"
+            + "\n\nRULES THAT FIRED\n"
+            + triggered_table
+            + "\n\nEXPLANATION TRACE\n"
             + "\n".join(explanation_lines)
         )
-        return dataset_section + "\n\n" + evaluation_section if dataset_section else evaluation_section
+
+        if dataset_section:
+            return evaluation_section + "\n\nDATASET REFERENCE\n" + dataset_section
+        return evaluation_section
 
     def _format_opened_report_overview(self, report: dict) -> str:
         dataset_section = self._format_dataset_section(self.dataset_metadata) if self.dataset_metadata else ""
+        recommendation = report.get("recommendation") or " ".join(report.get("recommendations", []))
         report_section = (
             "OPENED REPORT SUMMARY\n"
             f"Report ID: {report.get('report_id', 'Unknown')}\n"
             f"Timestamp: {report.get('timestamp', 'Unknown')}\n"
-            f"Final risk level: {report.get('final_risk_level') or report.get('assigned_risk_level', 'Unknown')}\n"
-            f"Recommendation: {report.get('recommendation') or ' '.join(report.get('recommendations', []))}\n"
-            f"Explanation summary: {report.get('explanation_text') or report.get('explanation', '')}"
+            f"Risk level: {report.get('final_risk_level') or report.get('assigned_risk_level', 'Unknown')}\n"
+            f"Summary: {report.get('explanation_text') or report.get('explanation', '')}\n"
+            "\nRECOMMENDED ACTIONS\n"
+            + "\n".join(self._format_sentence_list(recommendation))
         )
-        return dataset_section + "\n\n" + report_section if dataset_section else report_section
+
+        if dataset_section:
+            return report_section + "\n\nDATASET REFERENCE\n" + dataset_section
+        return report_section
 
     def _format_report_section(self, report: dict) -> str:
         return self.report_model.preview_text(report)
@@ -422,22 +433,27 @@ class AppController:
         wrapper: dict | None,
         report: dict | None,
     ) -> str:
-        lines = [
-            "ENCRYPTION, DECRYPTION, AND INTEGRITY STATUS",
-            crypto_message,
-        ]
+        lines = ["SECURITY AND INTEGRITY", f"Status summary: {crypto_message}"]
 
         if report is not None:
-            lines.append(f"Report SHA-256 integrity hash: {report.get('integrity_hash', '')}")
-            lines.append(f"Report nonce: {report.get('nonce', 'Not attached')}")
+            lines.extend(
+                [
+                    "",
+                    "REPORT SECURITY DETAILS",
+                    f"- SHA-256 integrity hash: {report.get('integrity_hash', '')}",
+                    f"- Nonce: {report.get('nonce', 'Not attached')}",
+                ]
+            )
 
         if wrapper is not None:
             lines.extend(
                 [
-                    f"Encryption scheme: {wrapper['encryption_scheme']}",
-                    f"Wrapper nonce: {wrapper['nonce']}",
-                    f"Stored wrapper integrity hash: {wrapper['stored_integrity_hash']}",
-                    f"Notice: {wrapper['educational_notice']}",
+                    "",
+                    "ENCRYPTED FILE DETAILS",
+                    f"- Encryption scheme: {wrapper['encryption_scheme']}",
+                    f"- Wrapper nonce: {wrapper['nonce']}",
+                    f"- Stored integrity hash: {wrapper['stored_integrity_hash']}",
+                    f"- Notice: {wrapper['educational_notice']}",
                 ]
             )
 
@@ -445,13 +461,31 @@ class AppController:
             lines.extend(
                 [
                     "",
-                    "INTEGRITY VERIFICATION",
-                    f"Status: {'PASSED' if verification['passed'] else 'FAILED'}",
-                    f"Computed hash: {verification['computed_hash']}",
-                    f"Report hash: {verification['report_hash']}",
+                    "INTEGRITY CHECK",
+                    f"- Result: {'PASSED' if verification['passed'] else 'FAILED'}",
+                    f"- Computed hash: {verification['computed_hash']}",
+                    f"- Report hash: {verification['report_hash']}",
                 ]
             )
             if verification.get("stored_hash") is not None:
-                lines.append(f"Wrapper stored hash: {verification['stored_hash']}")
+                lines.append(f"- Wrapper stored hash: {verification['stored_hash']}")
 
         return "\n".join(lines)
+
+    def _display_label(self, field: str) -> str:
+        return self.field_labels.get(field, field.replace("_", " "))
+
+    def _format_key_value_lines(self, values: dict) -> list[str]:
+        return [f"- {self._display_label(field)}: {value}" for field, value in values.items()]
+
+    @staticmethod
+    def _format_sentence_list(text: str) -> list[str]:
+        if not text:
+            return ["- No recommendation available."]
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", text.strip())
+            if sentence.strip()
+        ]
+        return [f"- {sentence}" for sentence in sentences]

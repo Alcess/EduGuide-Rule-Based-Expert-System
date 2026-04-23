@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from typing import Callable
 from datetime import datetime
 from uuid import uuid4
 
@@ -23,6 +25,14 @@ INTERMEDIATE_FIELDS = [
 REPORT_LABELS = {
     "Previous_Scores": "Previous Score Percentage (%)",
     "Exam_Score": "Exam Score Percentage (%)",
+    "Academic_Foundation": "Academic Foundation",
+    "Engagement_Status": "Engagement Status",
+    "Home_Support": "Home Support",
+    "Access_Status": "Access Status",
+    "Wellbeing_Status": "Wellbeing Status",
+    "Support_Need": "Support Need",
+    "Learning_Environment": "Learning Environment",
+    "Current_Performance": "Current Performance",
 }
 
 
@@ -91,45 +101,36 @@ class ReportModel:
             "REPORT PREVIEW",
             f"Report ID: {report.get('report_id', 'Unknown')}",
             f"Timestamp: {report.get('timestamp', 'Unknown')}",
+            f"Risk level: {risk_level}",
+            f"Summary: {explanation_text or 'No explanation summary available.'}",
             "",
-            "Raw Student Input Values",
+            "RECOMMENDED ACTIONS",
         ]
+        lines.extend(ReportModel._format_sentence_list(recommendation))
+
+        lines.extend(["", "STUDENT INPUTS"])
         lines.extend(
-            f"- {REPORT_LABELS.get(field, field)}: {value}" for field, value in raw_values.items()
+            f"- {REPORT_LABELS.get(field, field.replace('_', ' '))}: {value}" for field, value in raw_values.items()
         )
 
-        lines.extend(["", "Categorized / Profile Values"])
+        lines.extend(["", "CATEGORIZED PROFILE"])
         lines.extend(
-            f"- {REPORT_LABELS.get(field, field)}: {value}" for field, value in categorized_inputs.items()
+            f"- {REPORT_LABELS.get(field, field.replace('_', ' '))}: {value}"
+            for field, value in categorized_inputs.items()
         )
 
-        lines.extend(["", "Intermediate Knowledge Groups"])
+        lines.extend(["", "DERIVED FINDINGS"])
         for field in INTERMEDIATE_FIELDS:
             value = intermediate_facts.get(field, "Not Derived")
-            lines.append(f"- {field}: {value}")
+            lines.append(f"- {REPORT_LABELS.get(field, field.replace('_', ' '))}: {value}")
 
-        lines.extend(["", "Triggered Rules"])
-        if triggered_rules:
-            for rule in triggered_rules:
-                lines.append(
-                    f"- {rule.get('rule_id', '?')} [{rule.get('stage', 'unknown')}]: "
-                    f"{rule.get('description', '')} => {rule.get('conclusion_field', '')} = {rule.get('conclusion_value', '')}"
-                )
-        else:
-            lines.append("- No rule trace stored in this report.")
+        lines.extend(["", "RULES THAT FIRED"])
+        lines.append(ReportModel.format_rule_table(triggered_rules))
 
         lines.extend(
             [
                 "",
-                f"Final Risk Level: {risk_level}",
-                "",
-                "Recommendation",
-                recommendation or "No recommendation available.",
-                "",
-                "Explanation Summary",
-                explanation_text or "No explanation summary available.",
-                "",
-                "Explanation Trace",
+                "EXPLANATION TRACE",
             ]
         )
         if explanation_trace:
@@ -140,10 +141,75 @@ class ReportModel:
         lines.extend(
             [
                 "",
-                "Integrity and Storage",
+                "INTEGRITY AND STORAGE",
                 f"- Integrity Hash: {report.get('integrity_hash', '')}",
                 f"- Nonce: {report.get('nonce', 'Not attached')}",
             ]
         )
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_sentence_list(text: str | None) -> list[str]:
+        if not text:
+            return ["- No recommendation available."]
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", str(text).strip())
+            if sentence.strip()
+        ]
+        return [f"- {sentence}" for sentence in sentences]
+
+    @staticmethod
+    def format_rule_table(
+        triggered_rules: list[dict],
+        label_resolver: Callable[[str], str] | None = None,
+    ) -> str:
+        if not triggered_rules:
+            return "No rule trace stored in this report."
+
+        def resolve_label(field_name: str) -> str:
+            if label_resolver is not None:
+                return label_resolver(field_name)
+            return REPORT_LABELS.get(field_name, field_name.replace("_", " "))
+
+        rows: list[tuple[str, str, str, str]] = []
+        for rule in triggered_rules:
+            rule_id = str(rule.get("rule_id", "?"))
+            stage = str(rule.get("stage", "unknown")).title()
+            conclusion_field = resolve_label(str(rule.get("conclusion_field", "")))
+            conclusion_value = str(rule.get("conclusion_value", ""))
+            conclusion = f"{conclusion_field} = {conclusion_value}".strip()
+            description = ReportModel._truncate(str(rule.get("description", "")), 54)
+            rows.append((rule_id, stage, conclusion, description))
+
+        headers = ("ID", "Stage", "Conclusion", "Rule")
+        widths = [
+            max(len(headers[0]), max(len(row[0]) for row in rows)),
+            max(len(headers[1]), max(len(row[1]) for row in rows)),
+            max(len(headers[2]), min(32, max(len(row[2]) for row in rows))),
+            max(len(headers[3]), min(54, max(len(row[3]) for row in rows))),
+        ]
+
+        def format_row(values: tuple[str, str, str, str]) -> str:
+            cells = [
+                ReportModel._truncate(values[0], widths[0]).ljust(widths[0]),
+                ReportModel._truncate(values[1], widths[1]).ljust(widths[1]),
+                ReportModel._truncate(values[2], widths[2]).ljust(widths[2]),
+                ReportModel._truncate(values[3], widths[3]).ljust(widths[3]),
+            ]
+            return " | ".join(cells)
+
+        separator = "-+-".join("-" * width for width in widths)
+        lines = [format_row(headers), separator]
+        lines.extend(format_row(row) for row in rows)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _truncate(value: str, width: int) -> str:
+        if len(value) <= width:
+            return value
+        if width <= 3:
+            return value[:width]
+        return value[: width - 3].rstrip() + "..."

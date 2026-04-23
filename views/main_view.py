@@ -70,9 +70,13 @@ class MainView:
         self.input_vars: dict[str, tk.StringVar] = {}
         self.comboboxes: dict[str, ttk.Combobox] = {}
         self.overview_text: ScrolledText | None = None
+        self.overview_dataset_text: ScrolledText | None = None
         self.report_text: ScrolledText | None = None
         self.security_text: ScrolledText | None = None
         self.output_notebook: ttk.Notebook | None = None
+        self.overview_dataset_toggle: ttk.Button | None = None
+        self.overview_dataset_container: ttk.Frame | None = None
+        self.overview_dataset_visible = False
         self.status_var = tk.StringVar(
             value="Welcome to EduGuide. Review the system overview, then continue to the evaluation workspace."
         )
@@ -470,27 +474,115 @@ class MainView:
         self.output_notebook.add(report_tab, text="Report Preview")
         self.output_notebook.add(security_tab, text="Security")
 
-        self.overview_text = self._build_output_text(overview_tab)
+        self._build_overview_output_area(overview_tab)
         self.report_text = self._build_output_text(report_tab)
         self.security_text = self._build_output_text(security_tab)
 
-    def _build_output_text(self, parent: ttk.Frame) -> ScrolledText:
+    def _build_overview_output_area(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
-        widget = ScrolledText(
-            parent,
-            wrap="word",
-            font=("Consolas", 10),
-            padx=10,
-            pady=10,
-            relief="flat",
-            borderwidth=0,
-            background="#fffdf9",
-            foreground=PALETTE["text"],
+
+        self.overview_text = self._build_output_text(parent, row=0)
+
+        controls = ttk.Frame(parent, style="Page.TFrame")
+        controls.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        controls.columnconfigure(0, weight=1)
+
+        self.overview_dataset_toggle = ttk.Button(
+            controls,
+            text="Show Dataset Reference",
+            style="Secondary.TButton",
+            command=self._toggle_overview_dataset,
+            state="disabled",
         )
-        widget.grid(row=0, column=0, sticky="nsew")
+        self.overview_dataset_toggle.grid(row=0, column=0, sticky="w")
+
+        self.overview_dataset_container = ttk.Frame(parent, style="Page.TFrame")
+        self.overview_dataset_container.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
+        self.overview_dataset_container.rowconfigure(0, weight=1)
+        self.overview_dataset_container.columnconfigure(0, weight=1)
+        self.overview_dataset_container.grid_remove()
+
+        self.overview_dataset_text = self._build_output_text(
+            self.overview_dataset_container,
+            row=0,
+            height=12,
+        )
+
+    def _build_output_text(self, parent: ttk.Frame, row: int = 0, height: int | None = None) -> ScrolledText:
+        parent.rowconfigure(row, weight=1)
+        parent.columnconfigure(0, weight=1)
+        widget_options = {
+            "wrap": "word",
+            "font": ("Segoe UI", 10),
+            "padx": 14,
+            "pady": 14,
+            "relief": "flat",
+            "borderwidth": 0,
+            "background": "#fffdf9",
+            "foreground": PALETTE["text"],
+            "insertbackground": PALETTE["text"],
+            "spacing1": 2,
+            "spacing2": 1,
+            "spacing3": 4,
+        }
+        if height is not None:
+            widget_options["height"] = height
+
+        widget = ScrolledText(parent, **widget_options)
+        widget.grid(row=row, column=0, sticky="nsew")
+        self._configure_output_tags(widget)
         widget.configure(state="disabled")
         return widget
+
+    def _configure_output_tags(self, widget: ScrolledText) -> None:
+        widget.tag_configure(
+            "section_heading",
+            font=("Georgia", 12, "bold"),
+            foreground=PALETTE["hero"],
+            spacing1=10,
+            spacing3=6,
+        )
+        widget.tag_configure(
+            "subtle_heading",
+            font=("Segoe UI", 10, "bold"),
+            foreground=PALETTE["muted"],
+        )
+        widget.tag_configure(
+            "rule_table",
+            font=("Consolas", 9),
+            foreground=PALETTE["text"],
+            lmargin1=6,
+            lmargin2=6,
+        )
+        widget.tag_configure(
+            "risk_high",
+            foreground="#8a1c1c",
+            background="#fde6e2",
+            font=("Segoe UI", 10, "bold"),
+        )
+        widget.tag_configure(
+            "risk_moderate",
+            foreground="#8a5a00",
+            background="#fff1d6",
+            font=("Segoe UI", 10, "bold"),
+        )
+        widget.tag_configure(
+            "risk_low",
+            foreground="#1d6b3a",
+            background="#e2f5e8",
+            font=("Segoe UI", 10, "bold"),
+        )
+        widget.tag_configure(
+            "status_passed",
+            foreground="#1d6b3a",
+            font=("Segoe UI", 10, "bold"),
+        )
+        widget.tag_configure(
+            "status_failed",
+            foreground="#8a1c1c",
+            font=("Segoe UI", 10, "bold"),
+        )
 
     def _create_text_section(self, parent: tk.Frame, row: int, title: str, body: str) -> None:
         section = self._create_section_shell(parent, row=row, title=title)
@@ -631,7 +723,16 @@ class MainView:
                 self.input_vars[field].set(str(value))
 
     def set_overview_output(self, content: str) -> None:
-        self._set_output(self.overview_text, content)
+        marker = "\n\nDATASET REFERENCE\n"
+        dataset_content = ""
+        main_content = content
+
+        if marker in content:
+            main_content, dataset_content = content.split(marker, 1)
+
+        self._set_output(self.overview_text, main_content)
+        self._set_output(self.overview_dataset_text, dataset_content)
+        self._set_overview_dataset_availability(bool(dataset_content))
 
     def set_report_output(self, content: str) -> None:
         self._set_output(self.report_text, content)
@@ -650,14 +751,102 @@ class MainView:
         }
         self.output_notebook.select(tab_map.get(tab_name, 0))
 
-    @staticmethod
-    def _set_output(widget: ScrolledText | None, content: str) -> None:
+    def _set_overview_dataset_availability(self, has_content: bool) -> None:
+        if self.overview_dataset_toggle is None:
+            return
+
+        if has_content:
+            self.overview_dataset_toggle.configure(state="normal")
+            self._hide_overview_dataset()
+        else:
+            self.overview_dataset_toggle.configure(text="Show Dataset Reference", state="disabled")
+            self._hide_overview_dataset()
+
+    def _toggle_overview_dataset(self) -> None:
+        if self.overview_dataset_visible:
+            self._hide_overview_dataset()
+        else:
+            self._show_overview_dataset()
+
+    def _show_overview_dataset(self) -> None:
+        if self.overview_dataset_container is None or self.overview_dataset_toggle is None:
+            return
+        self.overview_dataset_container.grid()
+        self.overview_dataset_toggle.configure(text="Hide Dataset Reference")
+        self.overview_dataset_visible = True
+
+    def _hide_overview_dataset(self) -> None:
+        if self.overview_dataset_container is None or self.overview_dataset_toggle is None:
+            return
+        self.overview_dataset_container.grid_remove()
+        if self.overview_dataset_toggle.cget("state") != "disabled":
+            self.overview_dataset_toggle.configure(text="Show Dataset Reference")
+        self.overview_dataset_visible = False
+
+    def _set_output(self, widget: ScrolledText | None, content: str) -> None:
         if widget is None:
             return
         widget.configure(state="normal")
         widget.delete("1.0", tk.END)
         widget.insert(tk.END, content)
+        self._apply_output_tags(widget, content)
         widget.configure(state="disabled")
+
+    def _apply_output_tags(self, widget: ScrolledText, content: str) -> None:
+        for tag_name in (
+            "section_heading",
+            "subtle_heading",
+            "rule_table",
+            "risk_high",
+            "risk_moderate",
+            "risk_low",
+            "status_passed",
+            "status_failed",
+        ):
+            widget.tag_remove(tag_name, "1.0", tk.END)
+
+        lines = content.splitlines()
+        rule_section_active = False
+
+        for line_number, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            start = f"{line_number}.0"
+            end = f"{line_number}.{len(line)}"
+
+            if stripped and stripped == stripped.upper() and any(character.isalpha() for character in stripped):
+                widget.tag_add("section_heading", start, end)
+                rule_section_active = stripped == "RULES THAT FIRED"
+                continue
+
+            if not stripped:
+                rule_section_active = False
+                continue
+
+            if rule_section_active and ("|" in line or "+" in line):
+                widget.tag_add("rule_table", start, end)
+
+            if stripped.startswith(("Risk level:", "Result:", "Status summary:")):
+                widget.tag_add("subtle_heading", start, end)
+
+            self._highlight_phrase(widget, line_number, line, "High Risk", "risk_high")
+            self._highlight_phrase(widget, line_number, line, "Moderate Risk", "risk_moderate")
+            self._highlight_phrase(widget, line_number, line, "Low Risk", "risk_low")
+            self._highlight_phrase(widget, line_number, line, "PASSED", "status_passed")
+            self._highlight_phrase(widget, line_number, line, "FAILED", "status_failed")
+
+    @staticmethod
+    def _highlight_phrase(widget: ScrolledText, line_number: int, line: str, phrase: str, tag_name: str) -> None:
+        start_index = 0
+        while True:
+            match_index = line.find(phrase, start_index)
+            if match_index == -1:
+                break
+            widget.tag_add(
+                tag_name,
+                f"{line_number}.{match_index}",
+                f"{line_number}.{match_index + len(phrase)}",
+            )
+            start_index = match_index + len(phrase)
 
     def set_status(self, message: str) -> None:
         self.status_var.set(message)
