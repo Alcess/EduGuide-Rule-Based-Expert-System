@@ -173,9 +173,15 @@ class AppController:
             self.view.set_status("Open report failed.")
             return
 
+        report = result.get("report")
+        if not isinstance(report, dict):
+            self.view.show_error("The saved report is invalid or corrupted.")
+            self.view.set_status("Open report failed.")
+            return
+
         self.current_wrapper = wrapper
-        self.current_report = result["report"]
-        self.current_student_values = self.current_report.get("raw_student_values") or self.current_report.get(
+        self.current_report = report
+        self.current_student_values = report.get("raw_student_values") or report.get(
             "selected_student_values"
         )
         self.current_evaluation = None
@@ -183,14 +189,14 @@ class AppController:
         if self.current_student_values:
             self.view.set_student_inputs(self.current_student_values)
 
-        self.output_sections["report"] = self._format_report_section(self.current_report)
+        self.output_sections["report"] = self._format_report_section(report)
         self.output_sections["security"] = self._format_security_section(
             crypto_message=f"Decrypted saved report from: {selected_path}",
             verification=result["verification"],
             wrapper=wrapper,
-            report=self.current_report,
+            report=report,
         )
-        self.output_sections["overview"] = self._format_opened_report_overview(self.current_report)
+        self.output_sections["overview"] = self._format_opened_report_overview(report)
         self._refresh_output()
         self.view.show_evaluation_page()
         self.view.show_output_tab("report")

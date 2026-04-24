@@ -6,6 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
+from typing import TypeVar
 
 
 PALETTE = {
@@ -19,6 +20,8 @@ PALETTE = {
     "muted": "#58646b",
     "border": "#d6ccc0",
 }
+
+WidgetT = TypeVar("WidgetT")
 
 
 class ScrollablePage(tk.Frame):
@@ -335,7 +338,10 @@ class MainView:
             footer_actions,
             text="Open Saved Report",
             style="Secondary.TButton",
-            command=lambda: self.landing_open_report_button.invoke(),
+            command=lambda: self._require_widget(
+                self.landing_open_report_button,
+                "landing_open_report_button",
+            ).invoke(),
         ).grid(row=0, column=1)
 
     def _build_evaluation_page(self) -> None:
@@ -685,21 +691,45 @@ class MainView:
             anchor="w",
         ).pack(anchor="w", pady=(10, 0))
 
-    def bind_actions(self, controller) -> None:
-        self.start_evaluation_button.configure(command=controller.show_evaluation_page)
-        self.secondary_start_button.configure(command=controller.show_evaluation_page)
-        self.landing_info_button.configure(command=controller.show_help)
-        self.landing_open_report_button.configure(command=controller.open_encrypted_report)
-        self.landing_exit_button.configure(command=self.root.destroy)
-        self.back_home_button.configure(command=controller.show_landing_page)
-        self.help_button.configure(command=controller.show_help)
+    @staticmethod
+    def _require_widget(widget: WidgetT | None, widget_name: str) -> WidgetT:
+        if widget is None:
+            raise RuntimeError(f"MainView widget '{widget_name}' is not initialized.")
+        return widget
 
-        self.load_dataset_button.configure(command=controller.load_dataset)
-        self.evaluate_button.configure(command=controller.evaluate_student)
-        self.generate_report_button.configure(command=controller.generate_report)
-        self.save_report_button.configure(command=controller.save_encrypted_report)
-        self.open_report_button.configure(command=controller.open_encrypted_report)
-        self.verify_button.configure(command=controller.verify_current_report)
+    def bind_actions(self, controller) -> None:
+        self._require_widget(self.start_evaluation_button, "start_evaluation_button").configure(
+            command=controller.show_evaluation_page
+        )
+        self._require_widget(self.secondary_start_button, "secondary_start_button").configure(
+            command=controller.show_evaluation_page
+        )
+        self._require_widget(self.landing_info_button, "landing_info_button").configure(command=controller.show_help)
+        self._require_widget(self.landing_open_report_button, "landing_open_report_button").configure(
+            command=controller.open_encrypted_report
+        )
+        self._require_widget(self.landing_exit_button, "landing_exit_button").configure(command=self.root.destroy)
+        self._require_widget(self.back_home_button, "back_home_button").configure(
+            command=controller.show_landing_page
+        )
+        self._require_widget(self.help_button, "help_button").configure(command=controller.show_help)
+
+        self._require_widget(self.load_dataset_button, "load_dataset_button").configure(
+            command=controller.load_dataset
+        )
+        self._require_widget(self.evaluate_button, "evaluate_button").configure(command=controller.evaluate_student)
+        self._require_widget(self.generate_report_button, "generate_report_button").configure(
+            command=controller.generate_report
+        )
+        self._require_widget(self.save_report_button, "save_report_button").configure(
+            command=controller.save_encrypted_report
+        )
+        self._require_widget(self.open_report_button, "open_report_button").configure(
+            command=controller.open_encrypted_report
+        )
+        self._require_widget(self.verify_button, "verify_button").configure(
+            command=controller.verify_current_report
+        )
 
     def show_landing_page(self) -> None:
         self.landing_page.tkraise()
